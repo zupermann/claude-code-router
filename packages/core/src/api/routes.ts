@@ -12,6 +12,8 @@ import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
+import { registerPoolRoutes } from "./poolRoutes";
+import { stats } from "@/pool";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -86,6 +88,13 @@ async function handleTransformerEndpoint(
         req,
       }
     );
+
+    // Record successful request for pool stats
+    const scenarioType = (req as any).scenarioType || 'default';
+    const modelId = (req as any).body?.model;
+    if (scenarioType && modelId) {
+      stats.recordSuccess(scenarioType, modelId);
+    }
 
     // Format and return response
     return formatResponse(finalResponse, reply, body);
@@ -180,6 +189,12 @@ async function handleFallback(
       );
 
       req.log.info(`Fallback model ${fallbackModel} succeeded`);
+
+      // Record successful fallback request
+      const fallbackScenario = (req as any).scenarioType || 'default';
+      if (fallbackScenario && fallbackModel) {
+        stats.recordSuccess(fallbackScenario, fallbackModel);
+      }
 
       // Format and return response
       return formatResponse(finalResponse, reply, newBody);
@@ -679,6 +694,9 @@ export const registerApiRoutes = async (
       };
     }
   );
+
+  // Register pool monitoring routes
+  await registerPoolRoutes(fastify);
 };
 
 // Helper function

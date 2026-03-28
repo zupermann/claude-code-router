@@ -2,9 +2,15 @@ import { RouteValue, PoolState, TargetState, FailureContext, isPoolConfig } from
 import { parseAllRoutes } from './config'
 import { selectTarget, getCandidates } from './selection'
 import { applyFailure, updateRecovery, classifyFailure } from './health'
+import * as stats from './stats'
 
 // Re-export isPoolConfig for router
 export { isPoolConfig }
+// Re-export stats functions for external use
+export {
+  stats,
+  type stats,
+}
 
 /**
  * Global pool state store
@@ -54,6 +60,9 @@ export function selectTargetFromPool(scenario: string) {
   const result = selectTarget(pool)
   const candidates = getCandidates(pool)
 
+  // Record selection for stats tracking
+  stats.recordSelection(scenario, result.target.model)
+
   return {
     target: result.target,
     selectedFrom: result.selectedFrom,
@@ -87,6 +96,9 @@ export function recordFailure(
   if (!failureType) {
     return { suppressed: false }  // not a health failure
   }
+
+  // Record failure in stats
+  stats.recordFailure(scenario, model, failureType)
 
   // Apply failure
   const prevWeight = target.effectiveWeight
