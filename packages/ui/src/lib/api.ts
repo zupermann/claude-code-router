@@ -323,6 +323,127 @@ class ApiClient {
   async installPresetFromGitHub(repo: string, name?: string): Promise<any> {
     return this.post<any>('/presets/install/github', { repo, name });
   }
+
+  // Pool monitoring API methods
+  async getPoolStatus(): Promise<PoolStatusResponse> {
+    return this.get<PoolStatusResponse>('/pool/status');
+  }
+
+  async getPoolTargets(): Promise<PoolTargetsResponse> {
+    return this.get<PoolTargetsResponse>('/pool/targets');
+  }
+
+  async getPoolTargetsByScenario(scenario: string): Promise<PoolScenarioResponse> {
+    return this.get<PoolScenarioResponse>(`/pool/targets/${encodeURIComponent(scenario)}`);
+  }
+
+  async getPoolTargetDetail(scenario: string, model: string): Promise<PoolTargetDetailResponse> {
+    return this.get<PoolTargetDetailResponse>(`/pool/targets/${encodeURIComponent(scenario)}/${encodeURIComponent(model)}`);
+  }
+
+  async resetPoolTarget(scenario: string, model: string): Promise<{ ok: boolean; message: string; timestamp: number }> {
+    return this.post<{ ok: boolean; message: string; timestamp: number }>(`/pool/targets/${encodeURIComponent(scenario)}/${encodeURIComponent(model)}/reset`, {});
+  }
+
+  async resetPoolStats(scenario?: string): Promise<{ ok: boolean; message: string; timestamp: number; cleared?: number }> {
+    return this.post<{ ok: boolean; message: string; timestamp: number; cleared?: number }>('/pool/reset', { scenario });
+  }
+
+  async getPoolHistory(): Promise<PoolHistoryResponse> {
+    return this.get<PoolHistoryResponse>('/pool/history');
+  }
+}
+
+// Pool monitoring types
+export interface PoolStatusResponse {
+  timestamp: number;
+  pools: {
+    [scenario: string]: {
+      totalTargets: number;
+      healthy: number;
+      recovering: number;
+      suppressed: number;
+    };
+  };
+}
+
+export interface PoolTargetHealth {
+  status: 'healthy' | 'suppressed' | 'recovering';
+  effectiveWeight: number;
+  defaultWeight: number;
+  weightPercent: number;
+  suppressedUntil: number | null;
+  retryInMs: number;
+  retryInHuman: string | null;
+  consecutiveFailures: number;
+  lastFailureAt: number | null;
+  lastFailureType: string | null;
+  lastRecoveryStartedAt: number | null;
+}
+
+export interface PoolTargetStats {
+  totalRequests: number;
+  successCount: number;
+  failureCount: number;
+  lastSelectedAt: number | null;
+}
+
+export interface PoolTarget {
+  model: string;
+  health: PoolTargetHealth;
+  stats: PoolTargetStats;
+}
+
+export interface PoolScenario {
+  strategy: string;
+  health: {
+    cooldown_ms: number;
+    recovery_interval_ms: number;
+    recovery_step: number;
+  };
+  targets: PoolTarget[];
+}
+
+export interface PoolTargetsResponse {
+  timestamp: number;
+  scenarios: {
+    [scenario: string]: PoolScenario;
+  };
+}
+
+export interface PoolScenarioResponse {
+  timestamp: number;
+  scenario: {
+    name: string;
+    strategy: string;
+    health: PoolScenario['health'];
+    targets: PoolTarget[];
+  };
+}
+
+export interface PoolTargetDetailResponse {
+  timestamp: number;
+  target: PoolTarget & {
+    history: PoolHealthEvent[];
+  };
+}
+
+export interface PoolHealthEvent {
+  timestamp: number;
+  scenario: string;
+  model: string;
+  event: 'suppressed' | 'recovery_started' | 'recovered' | 'fail_open' | 'selected';
+  details: {
+    httpStatus?: number;
+    effectiveWeight?: number;
+    suppressedUntil?: number;
+  };
+}
+
+export interface PoolHistoryResponse {
+  timestamp: number;
+  totalEvents: number;
+  events: PoolHealthEvent[];
 }
 
 // Create a default instance of the API client

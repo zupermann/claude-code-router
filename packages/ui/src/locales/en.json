@@ -30,7 +30,8 @@
     "log_viewer": "Log Viewer",
     "presets": "Presets",
     "language": "Language",
-    "check_updates": "Check for Updates"
+    "check_updates": "Check for Updates",
+    "pool_dashboard": "Pool Monitoring"
   },
   "login": {
     "title": "Sign in to your account",
@@ -106,7 +107,6 @@
     "name_required": "Name is required",
     "name_duplicate": "A provider with this name already exists",
     "search": "Search providers..."
-
   },
   "router": {
     "title": "Router",
@@ -263,7 +263,6 @@
     "install_dialog_title": "Install Preset",
     "install_dialog_description": "Install a preset from a GitHub repository",
     "from_url": "From GitHub",
-    "github_repository": "GitHub Repository",
     "preset_url": "Repository URL",
     "preset_url_placeholder": "https://github.com/owner/repo",
     "preset_name": "Preset Name (Optional)",
@@ -298,5 +297,43 @@
       "apply": "Apply",
       "cancel": "Cancel"
     }
+  },
+  "pool_dashboard": {
+    "title": "Pool Monitoring",
+    "loading": "Loading pool data...",
+    "fetch_error": "Failed to fetch pool data",
+    "auto_refresh_on": "Auto (5s)",
+    "auto_refresh_off": "Auto Refresh",
+    "refresh": "Refresh",
+    "reset_stats": "Reset Stats",
+    "healthy": "Healthy",
+    "recovering": "Recovering",
+    "suppressed": "Suppressed",
+    "total_targets": "Total Targets",
+    "cooldown": "Cooldown",
+    "recovery_interval": "Recovery Interval",
+    "recovery_step": "Recovery Step",
+    "targets": "Targets",
+    "model": "Model",
+    "status": "Status",
+    "weight": "Weight",
+    "requests": "Requests",
+    "success_rate": "Success Rate",
+    "last_selected": "Last Selected",
+    "actions": "Actions",
+    "effective_weight": "Effective Weight",
+    "default_weight": "Default Weight",
+    "weight_percent": "Weight %",
+    "successes": "Successes",
+    "failures": "Failures",
+    "no_pools": "No pools configured",
+    "no_pools_description": "Pools will appear here once you configure Router settings",
+    "reset_target_title": "Reset Target",
+    "reset_target_description": "Reset suppression and stats for {{model}}?",
+    "reset": "Reset",
+    "resetting": "Resetting...",
+    "reset_success": "Target reset successfully",
+    "reset_failed": "Failed to reset target",
+    "reset_stats_success": "Stats reset successfully"
   }
 }
