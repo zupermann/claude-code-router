@@ -177,14 +177,23 @@ export class AnthropicTransformer implements Transformer {
       }
     });
 
+    // Filter out Claude Code's built-in web_search tool to force MCP usage
+    // The web_search tool requires Anthropic's internal infrastructure
+    const filteredTools = request.tools?.filter((tool: any) => {
+      // Filter out built-in web_search tool (type: web_search_20250305)
+      if (tool.type?.startsWith('web_search')) return false;
+      if (tool.name === 'web_search') return false;
+      return true;
+    });
+
     const result: UnifiedChatRequest = {
       messages,
       model: request.model,
       max_tokens: request.max_tokens,
       temperature: request.temperature,
       stream: request.stream,
-      tools: request.tools?.length
-        ? this.convertAnthropicToolsToUnified(request.tools)
+      tools: filteredTools?.length
+        ? this.convertAnthropicToolsToUnified(filteredTools)
         : undefined,
       tool_choice: request.tool_choice,
     };

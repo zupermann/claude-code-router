@@ -8,6 +8,47 @@ import {
 import { quote } from 'shell-quote';
 import minimist from "minimist";
 import { createEnvVariables } from "./createEnvVariables";
+import { readFileSync, existsSync } from "fs";
+import { homedir } from "os";
+import path from "path";
+
+// Interface for Claude's MCP server configuration
+interface McpServerConfig {
+  type?: "stdio" | "http" | "sse";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  description?: string;
+}
+
+interface ClaudeJsonConfig {
+  mcpServers?: Record<string, McpServerConfig>;
+  enableAllProjectMcpServers?: boolean;
+  enabledMcpjsonServers?: string[];
+  disabledMcpjsonServers?: string[];
+  allowedMcpServers?: Array<{ serverName: string }>;
+  deniedMcpServers?: Array<{ serverName: string }>;
+  [key: string]: any;
+}
+
+/**
+ * Read the user's Claude Code settings from ~/.claude.json
+ * This contains MCP server configurations
+ */
+function readClaudeJsonConfig(): ClaudeJsonConfig | null {
+  const claudeJsonPath = path.join(homedir(), ".claude.json");
+  if (!existsSync(claudeJsonPath)) {
+    return null;
+  }
+  try {
+    const content = readFileSync(claudeJsonPath, "utf-8");
+    return JSON.parse(content);
+  } catch {
+    return null;
+  }
+}
 
 export interface PresetConfig {
   noServer?: boolean;
@@ -69,6 +110,37 @@ export async function executeCodeCommand(
         ...settingsFlag.env,
         ...presetConfig.claudeCodeSettings.env,
       } as ClaudeSettingsFlag['env']
+    };
+  }
+
+  // Read user's Claude Code MCP configuration from ~/.claude.json
+  // and merge it into settingsFlag so MCP servers are available
+  const claudeJsonConfig = readClaudeJsonConfig();
+  if (claudeJsonConfig) {
+    // Include mcpServers and MCP-related settings
+    const mcpSettings: Partial<ClaudeJsonConfig> = {};
+    if (claudeJsonConfig.mcpServers) {
+      mcpSettings.mcpServers = claudeJsonConfig.mcpServers;
+    }
+    if (claudeJsonConfig.enableAllProjectMcpServers !== undefined) {
+      mcpSettings.enableAllProjectMcpServers = claudeJsonConfig.enableAllProjectMcpServers;
+    }
+    if (claudeJsonConfig.enabledMcpjsonServers) {
+      mcpSettings.enabledMcpjsonServers = claudeJsonConfig.enabledMcpjsonServers;
+    }
+    if (claudeJsonConfig.disabledMcpjsonServers) {
+      mcpSettings.disabledMcpjsonServers = claudeJsonConfig.disabledMcpjsonServers;
+    }
+    if (claudeJsonConfig.allowedMcpServers) {
+      mcpSettings.allowedMcpServers = claudeJsonConfig.allowedMcpServers;
+    }
+    if (claudeJsonConfig.deniedMcpServers) {
+      mcpSettings.deniedMcpServers = claudeJsonConfig.deniedMcpServers;
+    }
+
+    settingsFlag = {
+      ...settingsFlag,
+      ...mcpSettings,
     };
   }
 
