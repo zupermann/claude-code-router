@@ -100,8 +100,8 @@ async function getServer(options: RunOptions = {}) {
   let HOST = config.HOST || "127.0.0.1";
 
   if (hasProviders) {
-    HOST = config.HOST;
-    if (!config.APIKEY) {
+    // Only force 127.0.0.1 if HOST is not explicitly set AND no APIKEY
+    if (!config.HOST && !config.APIKEY) {
       HOST = "127.0.0.1";
     }
   } else {

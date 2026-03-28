@@ -484,5 +484,22 @@ export const createServer = async (config: any): Promise<any> => {
     return manifestToPresetFile(manifest);
   }
 
+  // Catch-all handler for SPA routes - serve index.html for non-API routes
+  // This handles all routes including '/' that aren't matched by API routes
+  app.setNotFoundHandler(async (req: any, reply: any) => {
+    const path = req.url;
+
+    // Don't interfere with API routes
+    if (path.startsWith("/api/") || path.startsWith("/v1/")) {
+      return reply.code(404).send({
+        error: "Not Found",
+        message: `Route ${req.method}:${path} not found`,
+      });
+    }
+
+    // Serve index.html for all other routes (SPA client-side routing)
+    return reply.sendFile("index.html", join(__dirname, "..", "dist"));
+  });
+
   return server;
 };

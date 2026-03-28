@@ -215,6 +215,10 @@ export const run = async (args: string[] = []) => {
 
   // await server.start() to ensure it starts successfully and keep process alive
   await server.start();
+
+  // Keep the process alive
+  console.log('Server started, keeping process alive...');
+  setInterval(() => {}, 1000);
 }
 
 export const restartService = async () => {
