@@ -47,7 +47,11 @@ async function handleTransformerEndpoint(
 
   // Get scenario and model for request history tracking
   const scenarioType = (req as any).selectedPoolScenario || (req as any).scenarioType || 'default';
-  const modelId = (req as any).selectedPoolTarget || (req as any).body?.model;
+
+  // Reconstruct full model name with provider prefix for pool stats tracking
+  // The pool stores targets as "provider,model" but body.model has the prefix stripped
+  const bodyModel = (req as any).body?.model;
+  const modelId = (req as any).selectedPoolTarget || (providerName && bodyModel ? `${providerName},${bodyModel}` : bodyModel);
 
   // Detect streaming request
   const isStreaming = body.stream === true;
