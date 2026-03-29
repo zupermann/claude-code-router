@@ -28,60 +28,54 @@ function makePoolState(targets: Array<{ model: string; weight: number }>): PoolS
 }
 
 describe('pool/selection', () => {
-  describe('weighted round-robin', () => {
-    it('selects by weight ratio', () => {
+  describe('weighted random selection', () => {
+    it('selects by weight ratio (probabilistic)', () => {
       const pool = makePoolState([
         { model: 'a', weight: 3 },
         { model: 'b', weight: 1 }
       ])
 
       const selections: string[] = []
-      for (let i = 0; i < 40; i++) {
+      for (let i = 0; i < 1000; i++) {
         const result = selectTarget(pool)
         selections.push(result.target.model)
       }
 
-      // Rough ratio check: 'a' should be ~3x more frequent than 'b'
+      // Statistical check: 'a' should be ~3x more frequent than 'b'
       const countA = selections.filter(m => m === 'a').length
       const countB = selections.filter(m => m === 'b').length
 
       expect(countA).toBeGreaterThan(countB)
-      expect(countA / countB).toBeCloseTo(3, 0)  // tolerance of ±0.5
+      // Allow 20% variance from expected ratio of 3
+      const ratio = countA / countB
+      expect(ratio).toBeGreaterThan(2.4)
+      expect(ratio).toBeLessThan(3.6)
     })
 
-    it('is deterministic', () => {
-      const pool1 = makePoolState([
+    it('is random (different selections on repeated calls)', () => {
+      const pool = makePoolState([
         { model: 'a', weight: 2 },
         { model: 'b', weight: 1 }
       ])
 
-      const pool2 = makePoolState([
-        { model: 'a', weight: 2 },
-        { model: 'b', weight: 1 }
-      ])
-
-      const selections1: string[] = []
-      const selections2: string[] = []
-
-      for (let i = 0; i < 10; i++) {
-        selections1.push(selectTarget(pool1).target.model)
+      const selections: string[] = []
+      for (let i = 0; i < 50; i++) {
+        selections.push(selectTarget(pool).target.model)
       }
 
-      for (let i = 0; i < 10; i++) {
-        selections2.push(selectTarget(pool2).target.model)
-      }
-
-      expect(selections1).toEqual(selections2)
+      // With 50 selections, it's extremely unlikely to get all 'a' or all 'b'
+      const uniqueSelections = new Set(selections)
+      expect(uniqueSelections.size).toBeGreaterThan(1)
     })
 
-    it('distributes evenly when weights are equal', () => {
+    it('distributes approximately evenly when weights are equal', () => {
       const pool = makePoolState([
         { model: 'a', weight: 1 },
         { model: 'b', weight: 1 }
       ])
 
       const selections: string[] = []
-      for (let i = 0; i < 20; i++) {
+      for (let i = 0; i < 100; i++) {
         const result = selectTarget(pool)
         selections.push(result.target.model)
       }
@@ -89,8 +83,8 @@ describe('pool/selection', () => {
       const countA = selections.filter(m => m === 'a').length
       const countB = selections.filter(m => m === 'b').length
 
-      // Should be exactly equal for smooth WRR with equal weights
-      expect(countA).toBe(countB)
+      // Should be roughly equal (within 20% variance)
+      expect(Math.abs(countA - countB)).toBeLessThan(20)
     })
 
     it('returns selectedFrom as healthy', () => {

@@ -1,14 +1,16 @@
 import { PoolState, TargetState, SelectionResult } from './types'
 
 /**
- * Smooth weighted round-robin selection
+ * Random weighted selection
  *
- * Algorithm:
- * 1. For each eligible target, increment currentWeight by effectiveWeight
- * 2. Select the target with highest currentWeight
- * 3. Decrease selected target's currentWeight by sum of all effective weights
+ * Algorithm (Roulette Wheel / Weighted Random):
+ * 1. Calculate total effective weight of all eligible targets
+ * 2. Generate random number between 0 and total weight
+ * 3. Iterate through targets, accumulating weights
+ * 4. Select target when accumulated weight exceeds random number
  *
- * This ensures proportional distribution without clustering.
+ * Each target's probability = effectiveWeight / totalEffectiveWeight
+ * e.g., weight 3 out of total 12 = 25% chance
  */
 export function selectTarget(pool: PoolState): SelectionResult {
   // Filter eligible targets:
@@ -23,27 +25,30 @@ export function selectTarget(pool: PoolState): SelectionResult {
     return selectFailOpen(pool)
   }
 
-  // WRR: increment all, select max, decrement selected
-  for (const target of eligibleTargets) {
-    target.currentWeight += target.effectiveWeight
-  }
-
-  let selected = eligibleTargets[0]
-  for (const target of eligibleTargets) {
-    if (target.currentWeight > selected.currentWeight) {
-      selected = target
-    }
-  }
-
-  // Decrement selected by sum of effective weights
-  const sumEffectiveWeights = eligibleTargets.reduce(
+  // Calculate total effective weight
+  const totalWeight = eligibleTargets.reduce(
     (sum, t) => sum + t.effectiveWeight,
     0
   )
-  selected.currentWeight -= sumEffectiveWeights
 
+  // Generate random number in range [0, totalWeight)
+  const random = Math.random() * totalWeight
+
+  // Select target using roulette wheel selection
+  let accumulated = 0
+  for (const target of eligibleTargets) {
+    accumulated += target.effectiveWeight
+    if (random < accumulated) {
+      return {
+        target,
+        selectedFrom: 'healthy'
+      }
+    }
+  }
+
+  // Fallback (shouldn't happen, but for safety)
   return {
-    target: selected,
+    target: eligibleTargets[eligibleTargets.length - 1],
     selectedFrom: 'healthy'
   }
 }

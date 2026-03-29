@@ -93,6 +93,8 @@ export type TargetState = {
   baseCooldown?: number            // Original cooldown from config (for exponential backoff)
   suppressedUntil?: number         // Timestamp in ms when suppression ends, undefined = not suppressed
   lastFailureAt?: number          // Timestamp in ms of last failure
+  lastFailureHttpStatus?: number  // HTTP status code of last failure (for display)
+  lastSuccessAt?: number          // Timestamp in ms of last successful request
   lastRecoveryStartedAt?: number  // Timestamp in ms when recovery phase started
   consecutiveFailures: number     // Used for exponential backoff calculation
   currentWeight: number           // Internal WRR accumulator (starts at 0)
