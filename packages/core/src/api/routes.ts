@@ -572,8 +572,8 @@ async function sendRequestToProvider(
   // Build request config
   const requestConfig: any = {
     httpsProxy: fastify.configService.getHttpsProxy(),
-    CONNECTION_TIMEOUT_MS: fastify.configService.getConnectionTimeout(),
-    REQUEST_TIMEOUT_MS: fastify.configService.getRequestTimeout(),
+    CONNECTION_TIMEOUT_MS: fastify.configService.get('CONNECTION_TIMEOUT_MS') ?? fastify.configService.get('API_TIMEOUT_MS') ?? 60000,
+    REQUEST_TIMEOUT_MS: fastify.configService.get('REQUEST_TIMEOUT_MS') ?? fastify.configService.get('API_TIMEOUT_MS') ?? 600000,
     ...config,
     headers: JSON.parse(JSON.stringify(requestHeaders)),
   };
