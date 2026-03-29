@@ -352,6 +352,14 @@ class ApiClient {
   async getPoolHistory(): Promise<PoolHistoryResponse> {
     return this.get<PoolHistoryResponse>('/pool/history');
   }
+
+  async getRequestHistory(): Promise<RequestHistoryResponse> {
+    return this.get<RequestHistoryResponse>('/pool/requests');
+  }
+
+  async getRequestHistoryByScenario(scenario: string): Promise<{ timestamp: number; scenario: string; requests: RequestHistoryEntry[] }> {
+    return this.get<{ timestamp: number; scenario: string; requests: RequestHistoryEntry[] }>(`/pool/requests/${encodeURIComponent(scenario)}`);
+  }
 }
 
 // Pool monitoring types
@@ -361,24 +369,31 @@ export interface PoolStatusResponse {
     [scenario: string]: {
       totalTargets: number;
       healthy: number;
-      recovering: number;
-      suppressed: number;
+      ready: number;
+      suspended: number;
     };
   };
 }
 
 export interface PoolTargetHealth {
-  status: 'healthy' | 'suppressed' | 'recovering';
+  status: 'healthy' | 'suspended' | 'ready';
   effectiveWeight: number;
   defaultWeight: number;
   weightPercent: number;
   suppressedUntil: number | null;
-  retryInMs: number;
-  retryInHuman: string | null;
   consecutiveFailures: number;
   lastFailureAt: number | null;
   lastFailureType: string | null;
+  lastFailureHttpStatus: number | null;
   lastRecoveryStartedAt: number | null;
+  lastSuccessAt: number | null;
+  // Timer info
+  timerMs: number;
+  timerLabel: string;
+  timerDirection: 'down' | 'up';
+  timerHuman: string | null;
+  // Recovery progress (only for recovering state)
+  recoveryProgress: number | null;
 }
 
 export interface PoolTargetStats {
@@ -386,6 +401,7 @@ export interface PoolTargetStats {
   successCount: number;
   failureCount: number;
   lastSelectedAt: number | null;
+  avgLatency: number | null;
 }
 
 export interface PoolTarget {
@@ -444,6 +460,32 @@ export interface PoolHistoryResponse {
   timestamp: number;
   totalEvents: number;
   events: PoolHealthEvent[];
+}
+
+export interface RequestHistoryEntry {
+  correlationId: string;
+  timestamp: number;
+  scenario: string;
+  targetModel: string;
+  outcome: 'success' | 'failure' | 'retry';
+  latencyMs: number;
+  httpStatus: number | null;
+  errorMessage: string | null;
+  isRetry: boolean;
+  originalModel: string | null;
+  originalCorrelationId: string | null;
+}
+
+export interface RequestHistoryResponse {
+  timestamp: number;
+  stats: {
+    totalRequests: number;
+    successCount: number;
+    failureCount: number;
+    retryCount: number;
+    avgLatency: number | null;
+  };
+  requests: RequestHistoryEntry[];
 }
 
 // Create a default instance of the API client

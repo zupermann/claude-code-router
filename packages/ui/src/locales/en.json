@@ -307,8 +307,8 @@
     "refresh": "Refresh",
     "reset_stats": "Reset Stats",
     "healthy": "Healthy",
-    "recovering": "Recovering",
-    "suppressed": "Suppressed",
+    "ready": "Ready",
+    "suspended": "Suspended",
     "total_targets": "Total Targets",
     "cooldown": "Cooldown",
     "recovery_interval": "Recovery Interval",
@@ -319,6 +319,7 @@
     "weight": "Weight",
     "requests": "Requests",
     "success_rate": "Success Rate",
+    "latency": "Latency",
     "last_selected": "Last Selected",
     "actions": "Actions",
     "effective_weight": "Effective Weight",
@@ -334,6 +335,12 @@
     "resetting": "Resetting...",
     "reset_success": "Target reset successfully",
     "reset_failed": "Failed to reset target",
-    "reset_stats_success": "Stats reset successfully"
+    "reset_stats_success": "Stats reset successfully",
+    "request_history": "Request History",
+    "time": "Time",
+    "correlation_id": "ID",
+    "outcome": "Outcome",
+    "error": "Error",
+    "no_requests": "No requests yet"
   }
 }

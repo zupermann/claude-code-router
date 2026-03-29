@@ -6,6 +6,7 @@
 import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as pool from '../pool'
 import { stats } from '../pool'
+import { requestHistory } from '../pool'
 
 /**
  * Format milliseconds to human-readable duration
@@ -24,15 +25,34 @@ function formatDuration(ms: number): string | null {
 
 /**
  * Get health status string from target state
+ * States: suspended (cooldown) -> ready (can be selected) -> healthy (confirmed working)
+ *
+ * State transitions:
+ * - suspended: in cooldown (suppressedUntil > now)
+ * - ready: cooldown passed but hasn't had a SUCCESS yet since last failure
+ * - healthy: at max weight AND had success since last failure
+ *
+ * Note: target.suppressed is already computed as (suppressedUntil !== undefined && suppressedUntil > Date.now())
  */
-function getHealthStatus(target: any): 'healthy' | 'suppressed' | 'recovering' {
-  const now = Date.now()
-  if (target.suppressed && target.suppressedUntil > now) {
-    return 'suppressed'
+function getHealthStatus(target: any): 'healthy' | 'suspended' | 'ready' {
+  // If still in cooldown/suspension period
+  if (target.suppressed) {
+    return 'suspended'
   }
-  if (target.recovering) {
-    return 'recovering'
+
+  // Check if we've had a success since the last failure
+  // If no success yet, or last failure was after last success, we're not truly healthy
+  const hasSuccessSinceLastFailure = target.lastSuccessAt &&
+    (!target.lastFailureAt || target.lastSuccessAt > target.lastFailureAt)
+
+  // If was suspended but now ready for selection (effectiveWeight may be 0 or recovering)
+  // OR if we haven't had a confirmed success since last failure
+  if (target.effectiveWeight < target.defaultWeight ||
+      target.lastRecoveryStartedAt ||
+      !hasSuccessSinceLastFailure) {
+    return 'ready'
   }
+
   return 'healthy'
 }
 
@@ -48,19 +68,94 @@ function calculateWeightPercent(targets: any[]): number[] {
 }
 
 /**
+ * Calculate timer info based on state
+ * Returns appropriate timer for the current state
+ */
+function calculateTimerInfo(target: any, health: any, now: number): {
+  timerMs: number;
+  timerLabel: string;
+  timerDirection: 'down' | 'up';
+} {
+  const status = getHealthStatus(target);
+
+  // suspended: countdown to end of cooldown
+  if (status === 'suspended' && target.suppressedUntil) {
+    const remaining = Math.max(0, target.suppressedUntil - now);
+    return {
+      timerMs: remaining,
+      timerLabel: remaining > 0 ? 'Cooldown' : 'Ready',
+      timerDirection: 'down'
+    };
+  }
+
+  // ready/recovering: countdown to next weight increase
+  if (status === 'ready' && target.lastRecoveryStartedAt) {
+    // If weight is already at max but we're still 'ready' (waiting for success),
+    // show time since recovery started
+    if (target.effectiveWeight >= target.defaultWeight) {
+      const sinceReady = now - target.lastRecoveryStartedAt;
+      return {
+        timerMs: sinceReady,
+        timerLabel: 'Ready for',
+        timerDirection: 'up'
+      };
+    }
+
+    // Otherwise show countdown to next weight increase
+    const elapsedMs = now - target.lastRecoveryStartedAt;
+    const stepsCompleted = Math.floor(elapsedMs / health.recovery_interval_ms);
+    const nextStepAt = target.lastRecoveryStartedAt + (stepsCompleted + 1) * health.recovery_interval_ms;
+    const untilNext = Math.max(0, nextStepAt - now);
+
+    return {
+      timerMs: untilNext,
+      timerLabel: 'Next weight',
+      timerDirection: 'down'
+    };
+  }
+
+  // ready but never started recovery (initial state)
+  if (status === 'ready') {
+    return {
+      timerMs: 0,
+      timerLabel: 'Awaiting first success',
+      timerDirection: 'down'
+    };
+  }
+
+  // healthy: count up since last success
+  if (status === 'healthy') {
+    const sinceHealthy = target.lastSuccessAt
+      ? now - target.lastSuccessAt
+      : 0;
+    return {
+      timerMs: sinceHealthy,
+      timerLabel: 'Healthy for',
+      timerDirection: 'up'
+    };
+  }
+
+  return { timerMs: 0, timerLabel: '', timerDirection: 'down' };
+}
+
+/**
  * Build target detail object with health, stats, and computed fields
  */
 function buildTargetDetail(
   target: any,
   stats: any,
   weightPercent: number,
-  now: number
+  now: number,
+  health: any
 ): any {
-  const status = getHealthStatus(target)
-  const retryInMs =
-    status === 'suppressed' && target.suppressedUntil
-      ? Math.max(0, target.suppressedUntil - now)
-      : 0
+  const status = getHealthStatus(target);
+  const timerInfo = calculateTimerInfo(target, health, now);
+
+  // Calculate recovery progress
+  let recoveryProgress = null;
+  if (status === 'ready' && target.defaultWeight > 0) {
+    recoveryProgress = Math.round((target.effectiveWeight / target.defaultWeight) * 100);
+  }
 
   return {
     model: target.model,
@@ -70,12 +165,19 @@ function buildTargetDetail(
       defaultWeight: target.defaultWeight,
       weightPercent: Math.round(weightPercent * 10) / 10, // round to 1 decimal
       suppressedUntil: target.suppressedUntil || null,
-      retryInMs,
-      retryInHuman: retryInMs > 0 ? formatDuration(retryInMs) : null,
       consecutiveFailures: target.consecutiveFailures,
       lastFailureAt: target.lastFailureAt || null,
       lastFailureType: target.lastFailureType || null,
+      lastFailureHttpStatus: target.lastFailureHttpStatus || null,
       lastRecoveryStartedAt: target.lastRecoveryStartedAt || null,
+      lastSuccessAt: target.lastSuccessAt || null,
+      // Timer info
+      timerMs: timerInfo.timerMs,
+      timerLabel: timerInfo.timerLabel,
+      timerDirection: timerInfo.timerDirection,
+      timerHuman: formatDuration(timerInfo.timerMs),
+      // Recovery progress (only for recovering state)
+      recoveryProgress,
     },
     stats: stats
       ? {
@@ -83,12 +185,14 @@ function buildTargetDetail(
           successCount: stats.successCount,
           failureCount: stats.failureCount,
           lastSelectedAt: stats.lastSelectedAt || null,
+          avgLatency: stats.avgLatency || null,
         }
       : {
           totalRequests: 0,
           successCount: 0,
           failureCount: 0,
           lastSelectedAt: null,
+          avgLatency: null,
         },
   }
 }
@@ -103,6 +207,7 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
   /**
    * GET /api/pool/status
    * High-level health summary for all scenarios
+   * Status: suspended -> ready -> healthy
    */
   fastify.get('/api/pool/status', async (_req: FastifyRequest, reply: FastifyReply) => {
     const poolSummary = pool.getPoolStatusSummary()
@@ -112,8 +217,8 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
       pools[scenario] = {
         totalTargets: summary.totalTargets,
         healthy: summary.healthy,
-        recovering: summary.recovering,
-        suppressed: summary.failed,
+        ready: summary.ready,
+        suspended: summary.suspended,
       }
     }
 
@@ -144,7 +249,7 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
         health: debugInfo.health,
         targets: debugInfo.targets.map((target: any, idx: number) => {
           const targetStats = scenarioStats?.get(target.model)
-          return buildTargetDetail(target, targetStats, weightPercents[idx], now)
+          return buildTargetDetail(target, targetStats, weightPercents[idx], now, debugInfo.health)
         }),
       }
     }
@@ -185,7 +290,7 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
           health: debugInfo.health,
           targets: debugInfo.targets.map((target: any, idx: number) => {
             const targetStats = scenarioStats?.get(target.model)
-            return buildTargetDetail(target, targetStats, weightPercents[idx], now)
+            return buildTargetDetail(target, targetStats, weightPercents[idx], now, debugInfo.health)
           }),
         },
       }
@@ -241,7 +346,7 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
       return {
         timestamp: Date.now(),
         target: {
-          ...buildTargetDetail(target, targetStats, weightPercent, Date.now()),
+          ...buildTargetDetail(target, targetStats, weightPercent, Date.now(), debugInfo.health),
           history: history.slice(-100), // Last 100 events
         },
       }
@@ -352,4 +457,38 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
       events: history,
     }
   })
+
+  /**
+   * GET /api/pool/requests
+   * Recent request history (last 50 requests)
+   * Tracks individual request outcomes including retries
+   */
+  fastify.get('/api/pool/requests', async (_req: FastifyRequest, reply: FastifyReply) => {
+    const history = requestHistory.getRequestHistory()
+    const stats = requestHistory.getRequestHistoryStats()
+
+    return {
+      timestamp: Date.now(),
+      stats,
+      requests: history,
+    }
+  })
+
+  /**
+   * GET /api/pool/requests/:scenario
+   * Request history for a specific scenario
+   */
+  fastify.get(
+    '/api/pool/requests/:scenario',
+    async (req: FastifyRequest<{ Params: { scenario: string } }>, reply: FastifyReply) => {
+      const { scenario } = req.params
+      const history = requestHistory.getRequestHistoryByScenario(scenario)
+
+      return {
+        timestamp: Date.now(),
+        scenario,
+        requests: history,
+      }
+    }
+  )
 }
