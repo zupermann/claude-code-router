@@ -75,10 +75,11 @@ export function applyFailure(
     target.lastFailureHttpStatus = httpStatus
   }
 
-  // Exponential backoff: baseCooldown * 2^(failures-1)
+  // Exponential backoff: baseCooldown * 2^(failures)
+  // 1st failure: 2 min, 2nd: 4 min, 3rd: 8 min, 4th: 16 min (capped)
   // Capped at MAX_COOLDOWN_MS
   const baseCooldown = target.baseCooldown ?? health?.cooldown_ms ?? 60000
-  const backoffMultiplier = Math.pow(2, target.consecutiveFailures - 1)
+  const backoffMultiplier = Math.pow(2, target.consecutiveFailures)
   const exponentialCooldown = Math.min(
     baseCooldown * backoffMultiplier,
     MAX_COOLDOWN_MS

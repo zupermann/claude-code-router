@@ -580,7 +580,9 @@ export function PoolDashboard({ showToast }: PoolDashboardProps) {
                                           </span>
                                         </td>
                                         <td className="py-2 text-xs">
-                                          {req.httpStatus ? (
+                                          {req.httpStatus === 408 ? (
+                                            <span className="text-orange-600 font-medium">Timeout</span>
+                                          ) : req.httpStatus ? (
                                             <span className={req.httpStatus >= 500 ? 'text-red-600' : req.httpStatus === 429 ? 'text-yellow-600' : req.httpStatus >= 400 ? 'text-orange-600' : 'text-gray-600'}>
                                               {req.httpStatus}
                                             </span>
