@@ -341,6 +341,10 @@
     "correlation_id": "ID",
     "outcome": "Outcome",
     "error": "Error",
-    "no_requests": "No requests yet"
+    "no_requests": "No requests yet",
+    "active_connections": "Active Connections",
+    "scenario": "Scenario",
+    "duration": "Duration",
+    "time_since_last_sse": "Time Since Last SSE"
   }
 }

@@ -360,6 +360,14 @@ class ApiClient {
   async getRequestHistoryByScenario(scenario: string): Promise<{ timestamp: number; scenario: string; requests: RequestHistoryEntry[] }> {
     return this.get<{ timestamp: number; scenario: string; requests: RequestHistoryEntry[] }>(`/pool/requests/${encodeURIComponent(scenario)}`);
   }
+
+  async getActiveConnections(): Promise<ActiveConnectionsResponse> {
+    return this.get<ActiveConnectionsResponse>('/pool/connections');
+  }
+
+  async getConnectionsByScenario(scenario: string): Promise<{ timestamp: number; scenario: string; count: number; connections: ActiveConnection[] }> {
+    return this.get<{ timestamp: number; scenario: string; count: number; connections: ActiveConnection[] }>(`/pool/connections/${encodeURIComponent(scenario)}`);
+  }
 }
 
 // Pool monitoring types
@@ -486,6 +494,24 @@ export interface RequestHistoryResponse {
     avgLatency: number | null;
   };
   requests: RequestHistoryEntry[];
+}
+
+// Active connection types for streaming monitoring
+export interface ActiveConnection {
+  correlationId: string;
+  scenario: string;
+  model: string;
+  startTime: number;
+  lastActivityTime: number;
+  status: 'active' | 'idle' | 'timeout';
+  duration: number;
+  timeSinceLastActivity: number;
+}
+
+export interface ActiveConnectionsResponse {
+  timestamp: number;
+  count: number;
+  connections: ActiveConnection[];
 }
 
 // Create a default instance of the API client

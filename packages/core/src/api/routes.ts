@@ -5,7 +5,7 @@ import {
   FastifyReply,
 } from "fastify";
 import { RegisterProviderRequest, LLMProvider } from "@/types/llm";
-import { sendUnifiedRequest } from "@/utils/request";
+import { sendUnifiedRequest, wrapStreamWithActivityTracking } from "@/utils/request";
 import { createApiError } from "./middleware";
 import { version } from "../../package.json";
 import { ConfigService } from "@/services/config";
@@ -13,7 +13,7 @@ import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
 import { registerPoolRoutes } from "./poolRoutes";
-import { stats, recordFailure, recordSuccess as recordPoolSuccess, getHealthyPoolTargets, selectHealthyPoolTarget, requestHistory } from "@/pool";
+import { stats, recordFailure, recordSuccess as recordPoolSuccess, getHealthyPoolTargets, selectHealthyPoolTarget, requestHistory, activeConnections } from "@/pool";
 import { applySuccess as applyPoolSuccess } from "@/pool/health";
 
 // Extend FastifyInstance to include custom services
@@ -49,10 +49,28 @@ async function handleTransformerEndpoint(
   const scenarioType = (req as any).selectedPoolScenario || (req as any).scenarioType || 'default';
   const modelId = (req as any).selectedPoolTarget || (req as any).body?.model;
 
-  // Track request start for history
+  // Detect streaming request
+  const isStreaming = body.stream === true;
+
+  // For streaming requests, start activity tracking
+  // This tracks "time since last SSE" and aborts if no activity for SSE_ACTIVITY_TIMEOUT_MS
+  let activityContext: {
+    correlationId: string;
+    signal: AbortSignal;
+    updateActivity: () => void;
+  } | null = null;
+
+  if (isStreaming && modelId) {
+    const timeoutMs = fastify.configService.get('SSE_ACTIVITY_TIMEOUT_MS') ?? 180_000;
+    activityContext = activeConnections.startConnection(scenarioType, modelId, timeoutMs);
+  }
+
+  // Track request start for history (for non-streaming or as additional tracking)
   const correlationId = modelId ? requestHistory.recordRequestStart(scenarioType, modelId) : '';
   // Store correlation ID on request for retry handlers
   (req as any).correlationId = correlationId;
+  // Store activity context for streaming
+  (req as any).activityContext = activityContext;
 
   // Validate provider exists
   if (!provider) {
@@ -85,6 +103,8 @@ async function handleTransformerEndpoint(
       transformer,
       {
         req,
+        isStreaming,
+        activitySignal: activityContext?.signal,
       }
     );
 
@@ -117,8 +137,14 @@ async function handleTransformerEndpoint(
     }
 
     // Format and return response
-    return formatResponse(finalResponse, reply, body);
+    // For streaming, pass activity context to wrap the stream
+    return formatResponse(finalResponse, reply, body, activityContext);
   } catch (error: any) {
+    // Clean up activity tracking on error
+    if (activityContext) {
+      activeConnections.endConnection(activityContext.correlationId);
+    }
+
     // Classify error type for proper status code assignment
     const isTimeout = error.name === 'TimeoutError' ||
                       error.cause?.name === 'TimeoutError' ||
@@ -543,16 +569,25 @@ async function sendRequestToProvider(
     }
   }
 
+  // Build request config
+  const requestConfig: any = {
+    httpsProxy: fastify.configService.getHttpsProxy(),
+    CONNECTION_TIMEOUT_MS: fastify.configService.getConnectionTimeout(),
+    REQUEST_TIMEOUT_MS: fastify.configService.getRequestTimeout(),
+    ...config,
+    headers: JSON.parse(JSON.stringify(requestHeaders)),
+  };
+
+  // For streaming requests, pass the activity signal for timeout management
+  if (context.isStreaming && context.activitySignal) {
+    requestConfig.isStreaming = true;
+    requestConfig.signal = context.activitySignal;
+  }
+
   const response = await sendUnifiedRequest(
     url,
     requestBody,
-    {
-      httpsProxy: fastify.configService.getHttpsProxy(),
-      CONNECTION_TIMEOUT_MS: fastify.configService.getConnectionTimeout(),
-      REQUEST_TIMEOUT_MS: fastify.configService.getRequestTimeout(),
-      ...config,
-      headers: JSON.parse(JSON.stringify(requestHeaders)),
-    },
+    requestConfig,
     context,
     fastify.log
   );
@@ -637,8 +672,14 @@ async function processResponseTransformers(
 /**
  * Format and return response
  * Handle HTTP status codes, format streaming and regular responses
+ * For streaming responses, wrap with activity tracking to monitor SSE events
  */
-function formatResponse(response: any, reply: FastifyReply, body: any) {
+function formatResponse(
+  response: any,
+  reply: FastifyReply,
+  body: any,
+  activityContext?: { correlationId: string; signal: AbortSignal; updateActivity: () => void } | null
+) {
   // Set HTTP status code
   if (!response.ok) {
     reply.code(response.status);
@@ -650,6 +691,17 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
     reply.header("Content-Type", "text/event-stream");
     reply.header("Cache-Control", "no-cache");
     reply.header("Connection", "keep-alive");
+
+    // Wrap response body with activity tracking if available
+    if (activityContext && response.body) {
+      const wrappedStream = wrapStreamWithActivityTracking(
+        response.body,
+        activityContext.updateActivity,
+        () => activeConnections.endConnection(activityContext.correlationId)
+      );
+      return reply.send(wrappedStream);
+    }
+
     return reply.send(response.body);
   } else {
     // Handle regular JSON response

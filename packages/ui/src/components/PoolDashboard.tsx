@@ -1,13 +1,13 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { api, type PoolStatusResponse, type PoolTargetsResponse, type PoolTarget, type RequestHistoryResponse } from '@/lib/api';
+import { api, type PoolStatusResponse, type PoolTargetsResponse, type PoolTarget, type RequestHistoryResponse, type ActiveConnectionsResponse } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Activity, RefreshCw, Server, AlertTriangle, CheckCircle, Clock, TrendingUp, RotateCcw, BarChart3, Shield, History, ChevronDown, ChevronUp } from 'lucide-react';
+import { Activity, RefreshCw, Server, AlertTriangle, CheckCircle, Clock, TrendingUp, RotateCcw, BarChart3, Shield, History, ChevronDown, ChevronUp, Zap } from 'lucide-react';
 
 interface PoolDashboardProps {
   showToast?: (message: string, type: 'success' | 'error' | 'warning') => void;
@@ -24,17 +24,20 @@ export function PoolDashboard({ showToast }: PoolDashboardProps) {
   const [isResetting, setIsResetting] = useState(false);
   const [requestHistory, setRequestHistory] = useState<RequestHistoryResponse | null>(null);
   const [showRequestHistory, setShowRequestHistory] = useState(true);
+  const [activeConnections, setActiveConnections] = useState<ActiveConnectionsResponse | null>(null);
 
   const fetchData = useCallback(async () => {
     try {
-      const [statusData, targetsData, historyData] = await Promise.all([
+      const [statusData, targetsData, historyData, connectionsData] = await Promise.all([
         api.getPoolStatus(),
         api.getPoolTargets(),
         api.getRequestHistory(),
+        api.getActiveConnections(),
       ]);
       setStatus(statusData);
       setTargets(targetsData);
       setRequestHistory(historyData);
+      setActiveConnections(connectionsData);
     } catch (error) {
       console.error('Failed to fetch pool data:', error);
       showToast?.(t('pool_dashboard.fetch_error'), 'error');
@@ -167,6 +170,22 @@ export function PoolDashboard({ showToast }: PoolDashboardProps) {
   const formatLatency = (ms: number) => {
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
+  };
+
+  // Format duration for active connections (shows minutes/seconds)
+  const formatDuration = (ms: number): string => {
+    if (ms < 0) return '0s';
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+
+    if (hours > 0) {
+      return `${hours}h ${minutes % 60}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds % 60}s`;
+    }
+    return `${seconds}s`;
   };
 
   // Generate a consistent color based on correlation ID hash
@@ -481,6 +500,61 @@ export function PoolDashboard({ showToast }: PoolDashboardProps) {
                       </div>
                     </CardContent>
                   </Card>
+
+                  {/* Active Connections Section */}
+                  {activeConnections && activeConnections.count > 0 && (
+                    <Card className="mt-4 border-orange-200 bg-orange-50">
+                      <CardHeader className="pb-2">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Zap className="h-4 w-4 text-orange-500" />
+                          {t('pool_dashboard.active_connections')}
+                          <Badge variant="outline" className="ml-auto">
+                            {activeConnections.count}
+                          </Badge>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent>
+                        <div className="overflow-x-auto">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="border-b text-left text-gray-600">
+                                <th className="pb-2 font-medium">{t('pool_dashboard.scenario')}</th>
+                                <th className="pb-2 font-medium">{t('pool_dashboard.model')}</th>
+                                <th className="pb-2 font-medium">{t('pool_dashboard.status')}</th>
+                                <th className="pb-2 font-medium">{t('pool_dashboard.duration')}</th>
+                                <th className="pb-2 font-medium">{t('pool_dashboard.time_since_last_sse')}</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {activeConnections.connections.map((conn) => (
+                                <tr key={conn.correlationId} className="border-b last:border-0">
+                                  <td className="py-2">{conn.scenario}</td>
+                                  <td className="py-2 font-mono text-xs truncate max-w-[200px]" title={conn.model}>
+                                    {conn.model}
+                                  </td>
+                                  <td className="py-2">
+                                    <Badge variant="outline" className={
+                                      conn.status === 'active' ? 'bg-green-100 text-green-800' :
+                                      conn.status === 'idle' ? 'bg-yellow-100 text-yellow-800' :
+                                      'bg-red-100 text-red-800'
+                                    }>
+                                      {conn.status}
+                                    </Badge>
+                                  </td>
+                                  <td className="py-2 text-xs">{formatDuration(conn.duration)}</td>
+                                  <td className="py-2 text-xs">
+                                    <span className={conn.timeSinceLastActivity > 60000 ? 'text-orange-600 font-medium' : ''}>
+                                      {formatDuration(conn.timeSinceLastActivity)}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  )}
 
                   {/* Request History Section */}
                   {requestHistory && (

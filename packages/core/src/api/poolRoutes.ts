@@ -7,6 +7,8 @@ import { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify'
 import * as pool from '../pool'
 import { stats } from '../pool'
 import { requestHistory } from '../pool'
+import { activeConnections } from '../pool'
+import { activeConnections } from '../pool'
 
 /**
  * Format milliseconds to human-readable duration
@@ -488,6 +490,59 @@ export async function registerPoolRoutes(fastify: FastifyInstance): Promise<void
         timestamp: Date.now(),
         scenario,
         requests: history,
+      }
+    }
+  )
+
+  /**
+   * GET /api/pool/connections
+   * List active streaming connections with activity tracking
+   * Shows currently active SSE connections with time since last activity
+   */
+  fastify.get('/api/pool/connections', async (_req: FastifyRequest, reply: FastifyReply) => {
+    const connections = activeConnections.getActiveConnections()
+    const now = Date.now()
+
+    return {
+      timestamp: now,
+      count: connections.length,
+      connections: connections.map(conn => ({
+        correlationId: conn.correlationId,
+        scenario: conn.scenario,
+        model: conn.model,
+        startTime: conn.startTime,
+        lastActivityTime: conn.lastActivityTime,
+        status: conn.status,
+        duration: now - conn.startTime,
+        timeSinceLastActivity: now - conn.lastActivityTime
+      }))
+    }
+  })
+
+  /**
+   * GET /api/pool/connections/:scenario
+   * List active connections for a specific scenario
+   */
+  fastify.get(
+    '/api/pool/connections/:scenario',
+    async (req: FastifyRequest<{ Params: { scenario: string } }>, reply: FastifyReply) => {
+      const { scenario } = req.params
+      const connections = activeConnections.getConnectionsByScenario(scenario)
+      const now = Date.now()
+
+      return {
+        timestamp: now,
+        scenario,
+        count: connections.length,
+        connections: connections.map(conn => ({
+          correlationId: conn.correlationId,
+          model: conn.model,
+          startTime: conn.startTime,
+          lastActivityTime: conn.lastActivityTime,
+          status: conn.status,
+          duration: now - conn.startTime,
+          timeSinceLastActivity: now - conn.lastActivityTime
+        }))
       }
     }
   )

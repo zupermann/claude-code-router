@@ -5,6 +5,7 @@ import { applyFailure, applySuccess, updateRecovery, classifyFailure } from './h
 import { poolLogger } from './logger'
 import * as stats from './stats'
 import * as requestHistory from './requestHistory'
+import * as activeConnections from './activeConnections'
 
 // Re-export isPoolConfig for router
 export { isPoolConfig }
@@ -20,6 +21,12 @@ export {
 export {
   requestHistory,
   type requestHistory,
+}
+
+// Re-export active connections for streaming monitoring
+export {
+  activeConnections,
+  type activeConnections,
 }
 
 /**
