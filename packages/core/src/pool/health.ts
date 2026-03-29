@@ -143,7 +143,8 @@ export function updateRecovery(
   if (target.effectiveWeight >= target.defaultWeight) {
     target.effectiveWeight = target.defaultWeight
     target.lastRecoveryStartedAt = undefined // Mark as fully recovered
-    target.consecutiveFailures = 0 // Reset failures only when fully healthy
+    // Note: consecutiveFailures is NOT reset here - only reset on actual SUCCESS
+    // This ensures exponential backoff persists across recovery cycles
     return
   }
 
@@ -166,7 +167,7 @@ export function updateRecovery(
   if (target.effectiveWeight >= target.defaultWeight) {
     target.effectiveWeight = target.defaultWeight
     target.lastRecoveryStartedAt = undefined
-    target.consecutiveFailures = 0
+    // Note: consecutiveFailures is NOT reset here - only reset on actual SUCCESS
   }
 }
 
