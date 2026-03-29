@@ -415,7 +415,7 @@ async function handlePoolRetry(
     }
   }
 
-  req.log.warn(`All ${healthyTargets.length} pool retry targets failed`);
+  req.log.warn(`All ${healthyTargetsCount} pool retry targets failed`);
   return null;
 }
 
