@@ -67,7 +67,7 @@ export function applyFailure(
   // Hard drop to 0
   target.effectiveWeight = 0
 
-  // Increment failure count BEFORE calculating backoff
+  // Increment failure count
   target.consecutiveFailures += 1
 
   // Store last HTTP status
@@ -75,11 +75,11 @@ export function applyFailure(
     target.lastFailureHttpStatus = httpStatus
   }
 
-  // Exponential backoff: baseCooldown * 2^(failures)
-  // 1st failure: 2 min, 2nd: 4 min, 3rd: 8 min, 4th: 16 min (capped)
+  // Exponential backoff: baseCooldown * 2^(failures-1)
+  // 1st failure: 2 min (2^0=1), 2nd: 4 min (2^1=2), 3rd: 8 min (2^2=4), 4th: 16 min (2^3=8)
   // Capped at MAX_COOLDOWN_MS
   const baseCooldown = target.baseCooldown ?? health?.cooldown_ms ?? 60000
-  const backoffMultiplier = Math.pow(2, target.consecutiveFailures)
+  const backoffMultiplier = Math.pow(2, target.consecutiveFailures - 1)
   const exponentialCooldown = Math.min(
     baseCooldown * backoffMultiplier,
     MAX_COOLDOWN_MS

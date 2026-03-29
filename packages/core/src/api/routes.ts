@@ -324,6 +324,9 @@ async function handlePoolRetry(
 
     attempts++;
 
+    // Track this selection for stats (totalRequests count)
+    stats.recordSelection(scenario, targetModel);
+
     // Track retry attempt in request history
     const retryCorrelationId = requestHistory.recordRetryStart(
       scenario,

@@ -15,6 +15,7 @@ export interface TargetStats {
   totalRequests: number // incremented on every selectTargetFromPool
   successCount: number // incremented when request completes without error
   failureCount: number // incremented on recordFailure calls
+  avgLatency?: number // exponential moving average latency in ms
   lastFailureType?: FailureType
   lastFailureAt?: number // ms timestamp
   lastSelectedAt?: number // ms timestamp - when last picked by WRR
@@ -83,10 +84,24 @@ export function recordSelection(scenario: string, model: string): void {
 /**
  * Record a successful request completion
  * Called after provider responds successfully
+ * Updates latency using exponential moving average:
+ *   new_avg = 0.25 * new_latency + 0.75 * previous_avg
  */
-export function recordSuccess(scenario: string, model: string): void {
+export function recordSuccess(
+  scenario: string,
+  model: string,
+  latencyMs: number
+): void {
   const stats = getOrCreateStats(scenario, model)
   stats.successCount++
+
+  // Update latency using exponential moving average
+  // EMA with alpha=0.25: new_avg = alpha * new_value + (1-alpha) * prev_avg
+  if (stats.avgLatency === undefined) {
+    stats.avgLatency = latencyMs
+  } else {
+    stats.avgLatency = Math.round(0.25 * latencyMs + 0.75 * stats.avgLatency)
+  }
 }
 
 /**
