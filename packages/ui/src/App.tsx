@@ -326,16 +326,6 @@ function App() {
               <p>{t('app.pool_dashboard')}</p>
             </TooltipContent>
           </Tooltip>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button variant="ghost" size="icon" onClick={() => navigate('/pool')} className="transition-all-ease hover:scale-110">
-                <BarChart3 className="h-5 w-5" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>{t('app.pool_dashboard')}</p>
-            </TooltipContent>
-          </Tooltip>
           <Popover>
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon" className="transition-all-ease hover:scale-110">
