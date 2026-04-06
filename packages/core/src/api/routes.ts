@@ -5,13 +5,16 @@ import {
   FastifyReply,
 } from "fastify";
 import { RegisterProviderRequest, LLMProvider } from "@/types/llm";
-import { sendUnifiedRequest } from "@/utils/request";
+import { sendUnifiedRequest, wrapStreamWithActivityTracking } from "@/utils/request";
 import { createApiError } from "./middleware";
 import { version } from "../../package.json";
 import { ConfigService } from "@/services/config";
 import { ProviderService } from "@/services/provider";
 import { TransformerService } from "@/services/transformer";
 import { Transformer } from "@/types/transformer";
+import { registerPoolRoutes } from "./poolRoutes";
+import { stats, recordFailure, recordSuccess as recordPoolSuccess, getHealthyPoolTargets, selectHealthyPoolTarget, requestHistory, activeConnections } from "@/pool";
+import { applySuccess as applyPoolSuccess } from "@/pool/health";
 
 // Extend FastifyInstance to include custom services
 declare module "fastify" {
@@ -40,6 +43,38 @@ async function handleTransformerEndpoint(
   const body = req.body as any;
   const providerName = req.provider!;
   const provider = fastify.providerService.getProvider(providerName);
+  const requestStartTime = Date.now(); // Track request start time for latency calculation
+
+  // Get scenario and model for request history tracking
+  const scenarioType = (req as any).selectedPoolScenario || (req as any).scenarioType || 'default';
+
+  // Reconstruct full model name with provider prefix for pool stats tracking
+  // The pool stores targets as "provider,model" but body.model has the prefix stripped
+  const bodyModel = (req as any).body?.model;
+  const modelId = (req as any).selectedPoolTarget || (providerName && bodyModel ? `${providerName},${bodyModel}` : bodyModel);
+
+  // Detect streaming request
+  const isStreaming = body.stream === true;
+
+  // For streaming requests, start activity tracking
+  // This tracks "time since last SSE" and aborts if no activity for SSE_ACTIVITY_TIMEOUT_MS
+  let activityContext: {
+    correlationId: string;
+    signal: AbortSignal;
+    updateActivity: () => void;
+  } | null = null;
+
+  if (isStreaming && modelId) {
+    const timeoutMs = fastify.configService.get('SSE_ACTIVITY_TIMEOUT_MS') ?? 180_000;
+    activityContext = activeConnections.startConnection(scenarioType, modelId, timeoutMs);
+  }
+
+  // Track request start for history (for non-streaming or as additional tracking)
+  const correlationId = modelId ? requestHistory.recordRequestStart(scenarioType, modelId) : '';
+  // Store correlation ID on request for retry handlers
+  (req as any).correlationId = correlationId;
+  // Store activity context for streaming
+  (req as any).activityContext = activityContext;
 
   // Validate provider exists
   if (!provider) {
@@ -72,6 +107,8 @@ async function handleTransformerEndpoint(
       transformer,
       {
         req,
+        isStreaming,
+        activitySignal: activityContext?.signal,
       }
     );
 
@@ -87,16 +124,63 @@ async function handleTransformerEndpoint(
       }
     );
 
+    // Calculate latency for this successful request
+    const latencyMs = Date.now() - requestStartTime;
+
+    // Record successful request for pool stats
+    // Use selectedPoolTarget if available (from pool selection), otherwise fall back to request model
+    if (scenarioType && modelId) {
+      stats.recordSuccess(scenarioType, modelId, latencyMs);
+      // Restore target to healthy state (effectiveWeight = defaultWeight)
+      recordPoolSuccess(scenarioType, modelId);
+    }
+
+    // Record request history success
+    if (correlationId) {
+      requestHistory.recordRequestEnd(correlationId, 'success', 200);
+    }
+
     // Format and return response
-    return formatResponse(finalResponse, reply, body);
+    // For streaming, pass activity context to wrap the stream
+    return formatResponse(finalResponse, reply, body, activityContext);
   } catch (error: any) {
-    // Handle fallback if error occurs
-    if (error.code === 'provider_response_error') {
-      const fallbackResult = await handleFallback(req, reply, fastify, transformer, error);
-      if (fallbackResult) {
-        return fallbackResult;
+    // Clean up activity tracking on error
+    if (activityContext) {
+      activeConnections.endConnection(activityContext.correlationId);
+    }
+
+    // Classify error type for proper status code assignment
+    const isTimeout = error.name === 'TimeoutError' ||
+                      error.cause?.name === 'TimeoutError' ||
+                      (error.message && /timeout/i.test(error.message));
+
+    // Assign HTTP status: 408 for timeouts, otherwise use error's status or null
+    const httpStatus = isTimeout ? 408 : error.statusCode;
+
+    // Record failure for pool stats (all error types)
+    if (scenarioType && modelId) {
+      recordFailure(scenarioType, modelId, httpStatus ?? undefined, error.message);
+    }
+
+    // Record request history failure
+    if (correlationId) {
+      requestHistory.recordRequestEnd(correlationId, 'failure', httpStatus, error.message);
+    }
+
+    // Try other healthy pool targets first
+    if (modelId) {
+      const poolRetryResult = await handlePoolRetry(req, reply, fastify, transformer, modelId, correlationId);
+      if (poolRetryResult) {
+        return poolRetryResult;
       }
     }
+
+    // Fall back to static fallback models
+    const fallbackResult = await handleFallback(req, reply, fastify, transformer, error);
+    if (fallbackResult) {
+      return fallbackResult;
+    }
+
     throw error;
   }
 }
@@ -128,6 +212,7 @@ async function handleFallback(
 
   // Try each fallback model in sequence
   for (const fallbackModel of fallbackList) {
+    const fallbackStartTime = Date.now(); // Track latency for this fallback attempt
     try {
       req.log.info(`Trying fallback model: ${fallbackModel}`);
 
@@ -181,6 +266,14 @@ async function handleFallback(
 
       req.log.info(`Fallback model ${fallbackModel} succeeded`);
 
+      // Record successful fallback request with latency
+      const fallbackLatencyMs = Date.now() - fallbackStartTime;
+      const fallbackScenario = (req as any).scenarioType || 'default';
+      if (fallbackScenario && fallbackModel) {
+        stats.recordSuccess(fallbackScenario, fallbackModel, fallbackLatencyMs);
+        recordPoolSuccess(fallbackScenario, fallbackModel);
+      }
+
       // Format and return response
       return formatResponse(finalResponse, reply, newBody);
     } catch (fallbackError: any) {
@@ -190,6 +283,139 @@ async function handleFallback(
   }
 
   req.log.error(`All fallback models failed for yichu ${scenarioType}`);
+  return null;
+}
+
+/**
+ * Try other healthy pool targets after a failure
+ * Returns response if successful, null if no healthy targets or all failed
+ */
+async function handlePoolRetry(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  fastify: FastifyInstance,
+  transformer: any,
+  failedModel: string,
+  originalCorrelationId: string
+): Promise<any> {
+  const scenario = (req as any).selectedPoolScenario || (req as any).scenarioType || 'default';
+
+  // Get count of healthy targets for logging
+  const healthyTargetsCount = getHealthyPoolTargets(scenario, failedModel).length;
+  if (healthyTargetsCount === 0) {
+    return null;
+  }
+
+  req.log.info(`Trying ${healthyTargetsCount} healthy pool targets after failure using weighted random selection`);
+
+  // Keep trying with weighted random selection until we succeed or run out of healthy targets
+  let attempts = 0;
+  const maxAttempts = healthyTargetsCount; // Don't try more times than we have targets
+
+  while (attempts < maxAttempts) {
+    // Select a target using weighted random selection (same algorithm as initial selection)
+    const targetModel = selectHealthyPoolTarget(scenario, failedModel);
+
+    if (!targetModel) {
+      // No healthy targets left (all weights went to 0)
+      req.log.info(`No more healthy targets available after ${attempts} attempts`);
+      return null;
+    }
+
+    attempts++;
+
+    // Track this selection for stats (totalRequests count)
+    stats.recordSelection(scenario, targetModel);
+
+    // Track retry attempt in request history
+    const retryCorrelationId = requestHistory.recordRetryStart(
+      scenario,
+      targetModel,
+      originalCorrelationId,
+      failedModel
+    );
+
+    const retryStartTime = Date.now();
+    try {
+      req.log.info(`Retrying with pool target: ${targetModel} (attempt ${attempts}/${maxAttempts})`);
+
+      // Get provider for this target (format: "provider,model" or just model)
+      const [providerName, ...modelParts] = targetModel.split(',');
+      const actualModel = modelParts.join(',') || providerName;
+      const targetProvider = fastify.providerService.getProvider(providerName);
+      if (!targetProvider) {
+        req.log.warn(`Provider '${providerName}' not found for target ${targetModel}, skipping`);
+        // Treat as failure, set weight to 0 and continue
+        recordFailure(scenario, targetModel, 404, `Provider not found: ${providerName}`);
+        continue;
+      }
+
+      // Update request with new target
+      (req as any).selectedPoolTarget = targetModel;
+      const newBody = { ...(req.body as any), model: actualModel };
+
+      // Process request transformer chain
+      const { requestBody, config, bypass } = await processRequestTransformers(
+        newBody,
+        targetProvider,
+        transformer,
+        req.headers,
+        { req }
+      );
+
+      // Send request to LLM provider
+      const response = await sendRequestToProvider(
+        requestBody,
+        config,
+        targetProvider,
+        fastify,
+        bypass,
+        transformer,
+        { req }
+      );
+
+      // Process response transformer chain
+      const finalResponse = await processResponseTransformers(
+        requestBody,
+        response,
+        targetProvider,
+        transformer,
+        bypass,
+        { req }
+      );
+
+      req.log.info(`Pool retry to ${targetModel} succeeded after ${attempts} attempt(s)`);
+
+      // Record successful retry with latency
+      const retryLatencyMs = Date.now() - retryStartTime;
+      stats.recordSuccess(scenario, targetModel, retryLatencyMs);
+      recordPoolSuccess(scenario, targetModel);
+
+      // Record request history retry success
+      requestHistory.recordRequestEnd(retryCorrelationId, 'retry', 200);
+
+      return formatResponse(finalResponse, reply, newBody);
+    } catch (retryError: any) {
+      // Classify error type for proper status code
+      const isTimeout = retryError.name === 'TimeoutError' ||
+                        retryError.cause?.name === 'TimeoutError' ||
+                        (retryError.message && /timeout/i.test(retryError.message));
+      const httpStatus = isTimeout ? 408 : retryError.statusCode;
+
+      // Record failure - this sets weight to 0, so next selection won't pick this target
+      recordFailure(scenario, targetModel, httpStatus ?? undefined, retryError.message);
+      req.log.warn(`Pool retry to ${targetModel} failed: ${retryError.message}`);
+
+      // Record request history retry failure
+      requestHistory.recordRequestEnd(retryCorrelationId, 'failure', httpStatus, retryError.message);
+
+      // Continue to next attempt - the failed target's weight is now 0,
+      // so the next weighted random selection will pick a different target
+      continue;
+    }
+  }
+
+  req.log.warn(`All ${healthyTargetsCount} pool retry targets failed`);
   return null;
 }
 
@@ -350,14 +576,25 @@ async function sendRequestToProvider(
     }
   }
 
+  // Build request config
+  const requestConfig: any = {
+    httpsProxy: fastify.configService.getHttpsProxy(),
+    CONNECTION_TIMEOUT_MS: fastify.configService.get('CONNECTION_TIMEOUT_MS') ?? fastify.configService.get('API_TIMEOUT_MS') ?? 60000,
+    REQUEST_TIMEOUT_MS: fastify.configService.get('REQUEST_TIMEOUT_MS') ?? fastify.configService.get('API_TIMEOUT_MS') ?? 600000,
+    ...config,
+    headers: JSON.parse(JSON.stringify(requestHeaders)),
+  };
+
+  // For streaming requests, pass the activity signal for timeout management
+  if (context.isStreaming && context.activitySignal) {
+    requestConfig.isStreaming = true;
+    requestConfig.signal = context.activitySignal;
+  }
+
   const response = await sendUnifiedRequest(
     url,
     requestBody,
-    {
-      httpsProxy: fastify.configService.getHttpsProxy(),
-      ...config,
-      headers: JSON.parse(JSON.stringify(requestHeaders)),
-    },
+    requestConfig,
     context,
     fastify.log
   );
@@ -442,8 +679,14 @@ async function processResponseTransformers(
 /**
  * Format and return response
  * Handle HTTP status codes, format streaming and regular responses
+ * For streaming responses, wrap with activity tracking to monitor SSE events
  */
-function formatResponse(response: any, reply: FastifyReply, body: any) {
+function formatResponse(
+  response: any,
+  reply: FastifyReply,
+  body: any,
+  activityContext?: { correlationId: string; signal: AbortSignal; updateActivity: () => void } | null
+) {
   // Set HTTP status code
   if (!response.ok) {
     reply.code(response.status);
@@ -455,6 +698,17 @@ function formatResponse(response: any, reply: FastifyReply, body: any) {
     reply.header("Content-Type", "text/event-stream");
     reply.header("Cache-Control", "no-cache");
     reply.header("Connection", "keep-alive");
+
+    // Wrap response body with activity tracking if available
+    if (activityContext && response.body) {
+      const wrappedStream = wrapStreamWithActivityTracking(
+        response.body,
+        activityContext.updateActivity,
+        () => activeConnections.endConnection(activityContext.correlationId)
+      );
+      return reply.send(wrappedStream);
+    }
+
     return reply.send(response.body);
   } else {
     // Handle regular JSON response
@@ -679,6 +933,9 @@ export const registerApiRoutes = async (
       };
     }
   );
+
+  // Register pool monitoring routes
+  await registerPoolRoutes(fastify);
 };
 
 // Helper function

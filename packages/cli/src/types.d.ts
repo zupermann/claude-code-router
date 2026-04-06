@@ -62,6 +62,16 @@ declare namespace NodeJS {
   }
 }
 
+interface McpServerConfig {
+  type?: "stdio" | "http" | "sse";
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  description?: string;
+}
+
 interface ClaudeSettingsFlag {
   env: {
     ANTHROPIC_AUTH_TOKEN?: any;
@@ -79,4 +89,11 @@ interface ClaudeSettingsFlag {
     command: string;
     padding: number;
   };
+  // MCP server configuration from ~/.claude.json
+  mcpServers?: Record<string, McpServerConfig>;
+  enableAllProjectMcpServers?: boolean;
+  enabledMcpjsonServers?: string[];
+  disabledMcpjsonServers?: string[];
+  allowedMcpServers?: Array<{ serverName: string }>;
+  deniedMcpServers?: Array<{ serverName: string }>;
 }
